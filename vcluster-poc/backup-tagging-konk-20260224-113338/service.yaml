@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    meta.helm.sh/release-name: tagging-aggregate-api
+    meta.helm.sh/release-namespace: tagging-v2
+    service.kubernetes.io/topology-aware-hints: Auto
+    service.kubernetes.io/topology-mode: Auto
+  creationTimestamp: "2025-04-22T06:46:42Z"
+  labels:
+    app.kubernetes.io/instance: tagging-aggregate-api
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: tagging-aggregate-api
+    app.kubernetes.io/version: 1.16.0
+    helm.sh/chart: tagging-aggregate-api-v0.1.5-37-g7aeb486-j60
+    helm.toolkit.fluxcd.io/name: tagging-aggregate-api
+    helm.toolkit.fluxcd.io/namespace: vela-system
+  name: tagging-aggregate-api-apiservice
+  namespace: tagging-v2
+  resourceVersion: "883450440"
+  uid: a60f8336-5874-4779-b14e-ef5e30924835
+spec:
+  clusterIP: 10.100.187.71
+  clusterIPs:
+  - 10.100.187.71
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 443
+    protocol: TCP
+    targetPort: 443
+  selector:
+    app.kubernetes.io/instance: tagging-aggregate-api
+    app.kubernetes.io/name: tagging-aggregate-api
+  sessionAffinity: None
+  type: ClusterIP
+status:
+  loadBalancer: {}

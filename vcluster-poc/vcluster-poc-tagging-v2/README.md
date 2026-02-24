@@ -295,24 +295,391 @@ NAME                                SERVICE                                 AVAI
 v1alpha1.tagging.poc.infoblox.com   extension-apis/mock-tagging-apiserver   True        5m
 ```
 
-### Key Differences to Address for Production
-
-| Challenge | konk Solution | vcluster Equivalent Needed |
-|-----------|---------------|---------------------------|
-| **Automatic APIService registration** | KonkService CR + operator | Custom operator or manual process |
-| **Certificate management** | cert-manager integration | vcluster's built-in PKI or custom |
-| **Kubeconfig generation** | KonkService creates secret | Manual or custom tooling |
-| **RBAC setup** | Automatic via konk-service chart | Manual or custom tooling |
-
 ---
 
-## Files Created
+## Part 4: Changes Required to Replace konk with vcluster for tagging-v2
 
-| File | Purpose |
-|------|---------|
-| `vcluster-poc/mock-apiserver.yaml` | Mock Extension API Server deployment (Python + HTTPS) |
-| `vcluster-poc/apiservice-registration.yaml` | APIService + ExternalName Service for vcluster |
-| `vcluster-poc/POC_DETAILS.md` | This documentation |
+### Current State
+
+- **konk** is deployed via `konk-operator` (namespace: `konk`) and `bulk` app (namespace: `aggregate`)
+- **vcluster** is now deployed in `vcluster` namespace via the company workflow (defined in `deployment-configurations/apps.yaml`)
+- **tagging-aggregate-api** helm chart creates a `KonkService` CR that auto-provisions APIService registration, TLS certs, kubeconfig, and RBAC
+
+### What KonkService Does Today (and what must be replaced)
+
+| What KonkService creates | Where | Replacement needed |
+|---|---|---|
+| `APIService` registration | Inside konk's apiserver | Create inside vcluster |
+| `ExternalName Service` | Inside konk | Create inside vcluster |
+| `Namespace` for service ref | Inside konk | Create inside vcluster |
+| `ClusterRole` for RBAC | Inside konk | Create inside vcluster |
+| TLS server cert secret (`tagging-aggregate-api-apiservice-konk-service-server`) | `tagging-v2` namespace on host | New cert via cert-manager or vcluster PKI |
+| Kubeconfig secret (`tagging-aggregate-api-apiservice-konk-service-kubeconfig`) | `tagging-v2` namespace on host | New kubeconfig pointing to vcluster |
+
+### Target Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                          HOST CLUSTER (EKS)                                │
+│                                                                            │
+│   ┌────────────────────────────────────────────────────────────────────┐   │
+│   │  vcluster namespace                                                │   │
+│   │                                                                    │   │
+│   │   ┌────────────────────────────────────────────────────────────┐   │   │
+│   │   │  vcluster-0 (vcluster — k3s apiserver)                     │   │   │
+│   │   │  - APIService: v1alpha1.tagging.bulk.infoblox.com          │   │   │
+│   │   │  - REPLACES bulk-konk                                      │   │   │
+│   │   └───────────────────────────┬────────────────────────────────┘   │   │
+│   └───────────────────────────────┼────────────────────────────────────┘   │
+│                                   │                                        │
+│                                   │ APIService proxies to                  │
+│                                   ▼                                        │
+│   ┌────────────────────────────────────────────────────────────────────┐   │
+│   │  tagging-v2 namespace                                              │   │
+│   │                                                                    │   │
+│   │   ┌────────────────────────────────────────────────────────────┐   │   │
+│   │   │  tagging-aggregate-api pod (UNCHANGED)                     │   │   │
+│   │   │  - Same Go binary, same business logic                     │   │   │
+│   │   │  - --authentication-kubeconfig now → vcluster               │   │   │
+│   │   │  - --authorization-kubeconfig now → vcluster                │   │   │
+│   │   └────────────────────────────────────────────────────────────┘   │   │
+│   └────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Change 1: Register APIService + ExternalName inside vcluster
+
+Create these resources **inside vcluster** (equivalent of what KonkService auto-created inside konk):
+
+```yaml
+# Namespace inside vcluster for the service reference
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tagging-v2
+---
+# ExternalName Service inside vcluster → points to host cluster service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tagging-aggregate-api-apiservice
+  namespace: tagging-v2
+spec:
+  type: ExternalName
+  externalName: tagging-aggregate-api-apiservice.tagging-v2.svc.cluster.local
+  ports:
+  - port: 443
+---
+# APIService registration inside vcluster
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.tagging.bulk.infoblox.com
+spec:
+  group: tagging.bulk.infoblox.com
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 100
+  insecureSkipTLSVerify: true          # for dev; use caBundle in prod
+  service:
+    name: tagging-aggregate-api-apiservice
+    namespace: tagging-v2
+    port: 443
+```
+
+**How to apply these automatically — options:**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Kubernetes Job (runs post-deploy) | Simple, scriptable | One-shot, no reconciliation |
+| Init container on tagging-aggregate-api | Tied to pod lifecycle | Adds startup latency |
+| Custom operator (VclusterService) | Full automation like KonkService | Significant development effort |
+| Manual via `vcluster connect` | Quick for dev/testing | Not sustainable for prod |
+
+### Change 2: tagging-aggregate-api Helm Chart
+
+The pod currently mounts **two konk-generated secrets**:
+
+```yaml
+# CURRENT — these secret names are created by KonkService
+volumes:
+- name: apiserver-cert
+  secret:
+    secretName: tagging-aggregate-api-apiservice-konk-service-server      # ← TLS cert
+- name: kubeconfig
+  secret:
+    secretName: tagging-aggregate-api-apiservice-konk-service-kubeconfig  # ← kubeconfig to konk
+```
+
+**Changes needed in the helm chart:**
+
+1. **Remove the `KonkService` CR template entirely** — this is the CR at the bottom of the rendered manifest:
+   ```yaml
+   # DELETE THIS from the chart
+   apiVersion: konk.infoblox.com/v1alpha1
+   kind: KonkService
+   metadata:
+     name: tagging-aggregate-api-apiservice
+     namespace: tagging-v2
+   spec:
+     group:
+       name: tagging.bulk.infoblox.com
+     konk:
+       name: bulk-konk
+       namespace: aggregate
+       scope: cluster
+     service:
+       name: tagging-aggregate-api-apiservice
+     version: v1alpha1
+   ```
+
+2. **Update volume secret references** to point to new vcluster-generated secrets:
+   ```yaml
+   # NEW — secret names for vcluster
+   volumes:
+   - name: apiserver-cert
+     secret:
+       secretName: tagging-aggregate-api-vcluster-server      # ← new TLS cert
+   - name: kubeconfig
+     secret:
+       secretName: tagging-aggregate-api-vcluster-kubeconfig  # ← kubeconfig to vcluster
+   ```
+
+3. **Container args stay the same** — still use `--authentication-kubeconfig` and `--authorization-kubeconfig`, just now the secret content points to vcluster's apiserver instead of konk.
+
+### Change 3: Kubeconfig Generation (most critical)
+
+This is the **hardest part** — replacing what KonkService automated.
+
+**What's needed:** A kubeconfig secret in the `tagging-v2` namespace that lets the tagging-aggregate-api pod authenticate against vcluster for delegated auth.
+
+**Steps:**
+
+1. Extract vcluster's admin kubeconfig from secret `vc-vcluster` in the `vcluster` namespace:
+   ```bash
+   kubectl get secret vc-vcluster -n vcluster -o jsonpath='{.data.config}' | base64 -d
+   ```
+
+2. Modify the server URL to use **internal cluster DNS** (not localhost/port-forward):
+   ```yaml
+   # Change server from:
+   server: https://localhost:8443
+   # To:
+   server: https://vcluster.vcluster.svc.cluster.local:443
+   ```
+
+3. Create the kubeconfig secret in `tagging-v2` namespace:
+   ```bash
+   kubectl create secret generic tagging-aggregate-api-vcluster-kubeconfig \
+     -n tagging-v2 \
+     --from-file=admin.conf=./vcluster-kubeconfig.yaml
+   ```
+
+**For automation**, this should become a Job or script that:
+- Reads the vcluster kubeconfig secret
+- Rewrites the server URL to internal DNS
+- Creates/updates the secret in the target namespace
+
+### Change 4: TLS Certificate Provisioning
+
+| Option | How | Dev | Prod |
+|--------|-----|-----|------|
+| `insecureSkipTLSVerify: true` in APIService | Set in vcluster-internal APIService spec | ✅ Good enough | ❌ Not recommended |
+| cert-manager with vcluster CA | Extract vcluster CA → create Issuer → issue cert | ✅ | ✅ Recommended |
+| Self-signed cert + caBundle | Generate cert, put CA in APIService `.spec.caBundle` | ✅ | ✅ Acceptable |
+
+### Change 5: deployment-configurations
+
+**`apps.yaml`** — update tagging-aggregate-api dependency:
+```yaml
+# Current:
+tagging-aggregate-api:
+  inherit-shared-values:
+    - legacy
+    - ingress
+  namespace: tagging-v2
+  # ... (no explicit konk dependency, but implicitly needs bulk app)
+
+# Add vcluster dependency:
+tagging-aggregate-api:
+  dependencies:
+    - name: vcluster
+  inherit-shared-values:
+    - legacy
+    - ingress
+  namespace: tagging-v2
+```
+
+**`build/*/tagging-aggregate-api.yaml`** — replace konk values:
+```yaml
+# Current (in every environment's values file):
+konk:
+  enabled: true
+  name: bulk-konk
+  namespace: aggregate
+  scope: cluster
+
+# Replace with:
+konk:
+  enabled: false    # disable KonkService creation
+
+vcluster:
+  enabled: true
+  name: vcluster
+  namespace: vcluster
+```
+
+### Change 6: RBAC inside vcluster
+
+KonkService created a `ClusterRole` inside konk. Create the equivalent inside vcluster:
+
+```yaml
+# Apply inside vcluster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tagging-aggregate-api-delegated-auth
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tagging-aggregate-api-delegated-auth
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tagging-aggregate-api-delegated-auth
+subjects:
+- kind: User
+  name: tagging-aggregate-api
+  apiGroup: rbac.authorization.k8s.io
+```
+<!-- 
+### Change 7: k8s.manifests Changes
+
+The `k8s.manifests` repository contains the rendered Kubernetes manifests that get applied to each cluster. These are **auto-generated** from the helm chart + values files by the deployment pipeline.
+
+**What changes automatically** (once helm chart is updated):
+- The `KonkService` CR will disappear from `dev/env-5/tagging-aggregate-api/manifest.yaml`
+- Secret volume references will change from `*-konk-service-*` to `*-vcluster-*`
+
+**What needs manual attention:**
+- If there is a new manifest directory needed for the vcluster-internal resources (APIService + ExternalName + RBAC), it depends on how you choose to apply them (Job, init container, or separate helm chart)
+- If a separate helm chart or Job is used to apply resources inside vcluster, a new manifest directory (e.g., `dev/env-5/vcluster-apiservice-registration/`) may be needed in each cluster folder
+
+**Current manifest structure** (per cluster):
+```
+k8s.manifests/
+  dev/env-5/
+    konk-operator/manifest.yaml        ← stays (still needed for other services during transition)
+    bulk/manifest.yaml                  ← stays (still needed for other services during transition)
+    tagging-aggregate-api/manifest.yaml ← changes (KonkService removed, new secret refs)
+    tagging-v2/manifest.yaml            ← unchanged (the tagging app itself)
+```
+
+**Note:** `konk-operator` and `bulk` manifests can only be removed once **all 11** extension API servers are migrated to vcluster, not just tagging-v2. -->
+
+### Change 7: Ingress (if applicable)
+
+KonkService supports a **front-proxy ingress** feature that allows external clients to reach extension APIs through an NGINX Ingress with mTLS. This needs to be checked for tagging-v2.
+
+**Check if tagging-v2 uses konk ingress:**
+```bash
+# Look for ingress spec in the KonkService CR
+kubectl get konkservice tagging-aggregate-api-apiservice -n tagging-v2 -o yaml | grep -A10 "ingress:"
+```
+
+**If ingress is NOT configured** (likely for tagging-v2 — it's an internal API):
+- No ingress changes needed
+- Skip this step
+
+**If ingress IS configured**, you need to:
+
+1. **Create a new Ingress** that routes to vcluster's apiserver instead of bulk-konk:
+   ```yaml
+   apiVersion: networking.k8s.io/v1
+   kind: Ingress
+   metadata:
+     name: tagging-aggregate-api-ingress
+     namespace: vcluster
+     annotations:
+       nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+       nginx.ingress.kubernetes.io/proxy-ssl-verify: "true"
+       # mTLS client cert for vcluster (replaces konk ingress client cert)
+       nginx.ingress.kubernetes.io/proxy-ssl-secret: "vcluster/vcluster-ingress-client"
+   spec:
+     ingressClassName: nginx
+     tls:
+     - hosts:
+       - tagging-api.example.com
+       secretName: tagging-api-tls
+     rules:
+     - host: tagging-api.example.com
+       http:
+         paths:
+         - path: /apis/tagging.bulk.infoblox.com
+           pathType: Prefix
+           backend:
+             service:
+               name: vcluster
+               port:
+                 number: 443
+   ```
+
+2. **Update DNS** if the hostname changes
+
+3. **Provision mTLS client certificate** for NGINX → vcluster authentication (replaces `<konk-name>-ingress-client` secret that KonkService created)
+
+**For the tagging-v2 pilot**, confirm with the team whether external ingress access is required. Most extension APIs are accessed internally via konk/vcluster only, making this step unnecessary.
+
+### Summary: Ordered Change List
+
+| # | Where | Change | Complexity |
+|---|---|---|---|
+| 1 | `tagging-aggregate-api` helm chart | Remove `KonkService` CR template | Low |
+| 2 | `tagging-aggregate-api` helm chart | Update volume mount secret names (TLS cert + kubeconfig) | Low |
+| 3 | `deployment-configurations/apps.yaml` | Add `vcluster` as dependency for `tagging-aggregate-api` | Low |
+| 4 | `deployment-configurations/build/*/tagging-aggregate-api.yaml` | Replace `konk.*` values with vcluster config, set `konk.enabled: false` | Medium |
+| 5 | Inside vcluster | Create Namespace + ExternalName Service + APIService (automation TBD) | Medium |
+| 6 | Inside vcluster | Create RBAC (ClusterRole + ClusterRoleBinding) for delegated auth | Low |
+| 7 | Host cluster (`tagging-v2` ns) | Generate kubeconfig secret pointing to vcluster apiserver | High |
+| 8 | Host cluster or vcluster PKI | Provision TLS serving cert for the Extension API Server | Medium |
+| 9 | `k8s.manifests` repo | Manifests auto-update; optionally add new dir for vcluster-internal resources | Low |
+| 10 | Ingress (if used) | Re-route external ingress from konk to vcluster; new mTLS client cert | Medium (skip if not used) |
+
+### Recommended Approach: Start in Dev
+
+1. **Manually** create kubeconfig secret in `tagging-v2` namespace (extracted from vcluster)
+2. **Manually** apply APIService + ExternalName + RBAC inside vcluster (via `vcluster connect`)
+3. Modify tagging-aggregate-api helm values to set `konk.enabled: false` and reference new secrets
+4. Verify tagging API works through vcluster
+5. Once verified, automate steps 1-2 with a Job or init-container before rolling to other environments
+
+### Full Migration Scope (all 11 Extension API Servers)
+
+Once tagging-v2 works, repeat for all services currently using konk:
+
+| Namespace | Service Name | API Group |
+|-----------|-------------|-----------|
+| atcapi | atcapi-apiservice | atcapi.bulk.infoblox.com |
+| ddi | dns-config-importexport-apiservice | dnsconfig.bulk.infoblox.com |
+| ddi | dns-data-importexport-apiservice | dnsdata.bulk.infoblox.com |
+| ddi | ipam-importexport-apiservice | ipamdhcp.bulk.infoblox.com |
+| ddi | keys-importexport-apiservice | keys.bulk.infoblox.com |
+| endpoints | endpoints-api-service-apiservice | endpoints.bulk.infoblox.com |
+| hostapp | hostapp-aggregate-api-apiservice | onprem.bulk.infoblox.com, infrastructure.bulk.infoblox.com |
+| ngp-cp | bootstrap-app-aggregate-api-apiservice | bootstrap.bulk.infoblox.com |
+| ntp | ntp-aggregate-api-apiservice | ntp.bulk.infoblox.com |
+| redirect | redirect-apiservice | redirect.bulk.infoblox.com |
+| tagging-v2 | tagging-aggregate-api-apiservice | tagging.bulk.infoblox.com |
+
+**Summary: 1 konk apiserver → 11 Extension API Servers → 12 API Groups → all need migration**
 
 ---
 
@@ -320,7 +687,7 @@ v1alpha1.tagging.poc.infoblox.com   extension-apis/mock-tagging-apiserver   True
 
 ### POC Verdict: ✅ SUCCESS
 
-This POC demonstrates that vcluster **can** provide the same API aggregation isolation as konk. 
+This POC demonstrates that vcluster **can** provide the same API aggregation isolation as konk.
 
 **What was proven:**
 - vcluster can host APIService registrations
@@ -332,17 +699,10 @@ This POC demonstrates that vcluster **can** provide the same API aggregation iso
 
 | Aspect | konk | vcluster |
 |--------|------|----------|
-| **Automation** | KonkService CR handles everything | Manual APIService + Service creation |
+| **Automation** | KonkService CR handles everything | Manual APIService + Service creation (needs tooling) |
 | **Overhead** | Lighter (apiserver + etcd only) | Heavier (full k3s control plane) |
-| **Maintenance** | Internal tooling | Active open-source community |
+| **Maintenance** | Internal tooling, limited updates | Active open-source community |
 | **Flexibility** | API aggregation only | Full K8s workload support |
-
-### Migration Path
-
-For production migration, you would need to either:
-1. **Build a `VclusterService` operator** (similar to KonkService) - Recommended
-2. **Manually configure** each Extension API Server
-3. **Use a hybrid approach** during transition
 
 ---
 

@@ -1,0 +1,281 @@
+apiVersion: konk.infoblox.com/v1alpha1
+kind: KonkService
+metadata:
+  annotations:
+    meta.helm.sh/release-name: tagging-aggregate-api
+    meta.helm.sh/release-namespace: tagging-v2
+  creationTimestamp: "2025-04-22T06:46:42Z"
+  finalizers:
+  - helm.sdk.operatorframework.io/uninstall-release
+  generation: 1
+  labels:
+    app.kubernetes.io/instance: tagging-aggregate-api
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: tagging-aggregate-api
+    app.kubernetes.io/version: 1.16.0
+    helm.sh/chart: tagging-aggregate-api-v0.1.5-37-g7aeb486-j60
+    helm.toolkit.fluxcd.io/name: tagging-aggregate-api
+    helm.toolkit.fluxcd.io/namespace: vela-system
+  name: tagging-aggregate-api-apiservice
+  namespace: tagging-v2
+  resourceVersion: "751323472"
+  uid: 88fd196f-17bc-400e-b1a7-d49d3eef9e25
+spec:
+  annotations:
+    bulk.infoblox.com/displayName: tagging-group
+  group:
+    name: tagging.bulk.infoblox.com
+  imagePullSecrets:- name: tagging-aggregate-api-imagepullsecret
+  konk:
+    name: bulk-konk
+    namespace: aggregate
+    scope: cluster
+  service:
+    name: tagging-aggregate-api-apiservice
+  version: v1alpha1
+status:
+  conditions:
+  - lastTransitionTime: "2025-04-22T06:46:42Z"
+    status: "True"
+    type: Initialized
+  - lastTransitionTime: "2025-04-22T06:47:07Z"
+    reason: InstallSuccessful
+    status: "True"
+    type: Deployed
+  deployedRelease:
+    manifest: "---\n# Source: konk-service/templates/serviceaccount.yaml\napiVersion:
+      v1\nkind: ServiceAccount\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service\n
+      \ labels:\n    helm.sh/chart: konk-service-0.1.0\n    app.kubernetes.io/name:
+      konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nimagePullSecrets:\n- name: tagging-aggregate-api-apiservice-konk-service-imagepullsecret\n---\n#
+      Source: konk-service/templates/apiservice-configmap.yaml\napiVersion: v1\nkind:
+      ConfigMap\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-mounts\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\ndata:\n  deploy-api-service.sh: |\n    #!/bin/bash\n    set -xe\n\n    CERT=$(cat
+      certs/ca.crt | base64)\n    CERT=${CERT//$'\\n'/}\n    cat /mounts/api-service.yaml.in
+      | sed \"s/ {{ SERVICENAME }} /${SERVICENAME}/g\" | sed \"s/ {{ NAMESPACE }}
+      /${NAMESPACE}/g\" | sed \"s/ {{ CERT }} /${CERT}/g\" > /gen/api-service.yaml\n
+      \   delay=2\n    until kubectl apply -f /gen/api-service.yaml\n    do\n      sleep
+      $delay\n      let delay=\"delay*2\"\n      if [ \"$delay\" -gt \"60\" ]\n      then\n
+      \       delay=60\n      fi\n    done\n    INSTALL=install\n    if [ \"$CRDS\"
+      == \"$INSTALL\" ]\n    then\n      kubectl apply -f /mounts/\n    fi\n    echo
+      'Done' > /tmp/healthy\n\n  delete-api-service.sh: |\n    #!/bin/bash\n    set
+      -x\n    kubectl get nodes\n\n    if [ $? -eq 0 ]\n    then\n      CERT=$(cat
+      certs/ca.crt | base64)\n      CERT=${CERT//$'\\n'/}\n      cat /mounts/delete-api-service.yaml.in
+      | sed \"s/ {{ SERVICENAME }} /${SERVICENAME}/g\" | sed \"s/ {{ NAMESPACE }}
+      /${NAMESPACE}/g\" | sed \"s/ {{ CERT }} /${CERT}/g\" > /gen/delete-api-service.yaml\n
+      \     kubectl delete -f /gen/delete-api-service.yaml\n    fi\n    echo 'Done'
+      > /tmp/healthy\n\n  api-service.yaml.in: |\n    apiVersion: v1\n    kind: Namespace\n
+      \   metadata:\n      name:  {{ NAMESPACE }} \n    ---\n    apiVersion: v1\n
+      \   kind: Service\n    metadata:\n      name:  {{ SERVICENAME }} \n      namespace:
+      \ {{ NAMESPACE }} \n    spec:\n      type: ExternalName\n      externalName:
+      \ {{ SERVICENAME }} . {{ NAMESPACE }} \n    ---\n    apiVersion: apiregistration.k8s.io/v1\n
+      \   kind: APIService\n    metadata:\n      name: v1alpha1.tagging.bulk.infoblox.com\n
+      \     annotations: \n        bulk.infoblox.com/displayName: tagging-group\n
+      \   spec:\n      caBundle:  {{ CERT }} \n      group: tagging.bulk.infoblox.com\n
+      \     groupPriorityMinimum: 1000\n      service:\n        name:  {{ SERVICENAME
+      }} \n        namespace:  {{ NAMESPACE }} \n      version: v1alpha1\n      versionPriority:
+      100\n    ---\n    apiVersion: rbac.authorization.k8s.io/v1\n    kind: ClusterRole\n
+      \   metadata:\n      name: tagging.bulk.infoblox.com-edit\n      labels:\n        rbac.authorization.k8s.io/aggregate-to-edit:
+      \"true\"\n        rbac.authorization.k8s.io/aggregate-to-admin: \"true\"\n    rules:\n
+      \     - apiGroups:\n        - tagging.bulk.infoblox.com\n        resources:\n
+      \       - \"*\"\n        verbs:\n        - \"*\"\n\n  delete-api-service.yaml.in:
+      |\n    apiVersion: v1\n    kind: Service\n    metadata:\n      name:  {{ SERVICENAME
+      }} \n      namespace:  {{ NAMESPACE }} \n    spec:\n      type: ExternalName\n
+      \     externalName:  {{ SERVICENAME }} . {{ NAMESPACE }} \n    ---\n    apiVersion:
+      apiregistration.k8s.io/v1\n    kind: APIService\n    metadata:\n      name:
+      v1alpha1.tagging.bulk.infoblox.com\n      annotations: \n        bulk.infoblox.com/displayName:
+      tagging-group\n    spec:\n      caBundle:  {{ CERT }} \n      group: tagging.bulk.infoblox.com\n
+      \     groupPriorityMinimum: 1000\n      service:\n        name:  {{ SERVICENAME
+      }} \n        namespace:  {{ NAMESPACE }} \n      version: v1alpha1\n      versionPriority:
+      100\n    ---\n    apiVersion: rbac.authorization.k8s.io/v1\n    kind: ClusterRole\n
+      \   metadata:\n      name: tagging.bulk.infoblox.com-edit\n      labels:\n        rbac.authorization.k8s.io/aggregate-to-edit:
+      \"true\"\n        rbac.authorization.k8s.io/aggregate-to-admin: \"true\"\n    rules:\n
+      \     - apiGroups:\n        - tagging.bulk.infoblox.com\n        resources:\n
+      \       - \"*\"\n        verbs:\n        - \"*\"\n---\n# Source: konk-service/templates/kubeconfig-rbac.yaml\napiVersion:
+      rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nrules:\n  - apiGroups:\n    - \"\"\n    resources:\n    - secrets\n    verbs:\n
+      \   - create\n    - get\n    - delete\n    - list\n    - patch\n    - watch\n
+      \ - apiGroups:\n    - \"apps\"\n    resources:\n    - deployments\n    verbs:\n
+      \   - get\n---\n# Source: konk-service/templates/kubeconfig-rbac.yaml\napiVersion:
+      rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name:
+      tagging-aggregate-api-apiservice-konk-service-kubeconfig\nsubjects:\n- kind:
+      ServiceAccount\n  name: tagging-aggregate-api-apiservice-konk-service\n---\n#
+      Source: konk-service/templates/apiservice-deployment.yaml\napiVersion: apps/v1\nkind:
+      Deployment\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubectl-apiservice\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name:
+      konk-service\n      app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \     app.kubernetes.io/component: apiservice\n  template:\n    metadata:\n
+      \     annotations:\n        checksum/config: df7e1da4d7a1e9a6820442145a4db1c12a1d902a42adf179c075175972648b59\n
+      \       checksum/values: a5501d7c392e5784e6ce447b670ee2d1cbb85386261016605ea78106fa4d3825\n
+      \     labels:\n        app.kubernetes.io/name: konk-service\n        app.kubernetes.io/instance:
+      tagging-aggregate-api-apiservice\n        app.kubernetes.io/component: apiservice\n
+      \   spec:\n      serviceAccountName: tagging-aggregate-api-apiservice-konk-service\n
+      \     containers:\n      - name: kind\n        securityContext:\n          {}\n
+      \       image: \"kindest/node:v1.25.8\"\n        imagePullPolicy: Always\n        command:
+      [\"/bin/bash\", \"-c\"]\n        args:\n          - |\n            while true\n
+      \           do\n              /mounts/deploy-api-service.sh\n              date\n
+      \             sleep 30\n            done\n        env:\n          - name: SERVICENAME\n
+      \           value: tagging-aggregate-api-apiservice\n          - name: NAMESPACE\n
+      \           value: tagging-v2\n          - name: KUBECONFIG\n            value:
+      /etc/kubernetes/admin.conf\n        resources:\n          limits:\n            memory:
+      4Gi\n          requests:\n            cpu: 10m\n            memory: 40Mi\n        volumeMounts:\n
+      \       - name: kubeconfig\n          mountPath: \"/etc/kubernetes\"\n          readOnly:
+      true\n        - name: ca-cert\n          mountPath: \"certs\"\n          readOnly:
+      true\n        - name: mounts\n          mountPath: \"mounts\"\n          readOnly:
+      true\n        - name: gen\n          mountPath: \"gen\"\n        readinessProbe:\n
+      \         exec:\n            command:\n            - cat\n            - /tmp/healthy\n
+      \         initialDelaySeconds: 5\n          periodSeconds: 5\n      volumes:\n
+      \     - name: kubeconfig\n        secret:\n          secretName: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \     - name: ca-cert\n        secret:\n          secretName: tagging-aggregate-api-apiservice-konk-service-server\n
+      \     - name: mounts\n        configMap:\n          name: tagging-aggregate-api-apiservice-konk-service-mounts\n
+      \         defaultMode: 0777\n      - name: gen\n        emptyDir: {}\n---\n#
+      Source: konk-service/templates/apiservice-test-deployment.yaml\napiVersion:
+      apps/v1\nkind: Deployment\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubectl-apiservice-test\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name:
+      konk-service\n      app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \     app.kubernetes.io/component: apiservice-test\n  template:\n    metadata:\n
+      \     annotations:\n        checksum/config: df7e1da4d7a1e9a6820442145a4db1c12a1d902a42adf179c075175972648b59\n
+      \       checksum/values: a5501d7c392e5784e6ce447b670ee2d1cbb85386261016605ea78106fa4d3825\n
+      \     labels:\n        app.kubernetes.io/name: konk-service\n        app.kubernetes.io/instance:
+      tagging-aggregate-api-apiservice\n        app.kubernetes.io/component: apiservice-test\n
+      \   spec:\n      serviceAccountName: tagging-aggregate-api-apiservice-konk-service\n
+      \     containers:\n      - name: kind\n        securityContext:\n          {}\n
+      \       image: \"kindest/node:v1.25.8\"\n        imagePullPolicy: Always\n        command:
+      [\"/bin/bash\", \"-c\"]\n        args:\n          - |\n            set -x\n
+      \           while true\n            do\n              date\n              kubectl
+      get apiservice v1alpha1.tagging.bulk.infoblox.com && \\\n              kubectl
+      api-resources --api-group=tagging.bulk.infoblox.com\n              echo $? >
+      /tmp/healthy\n              sleep $[ 30 + ( $RANDOM % 5 ) ]\n            done\n
+      \       env:\n          - name: KUBECONFIG\n            value: /etc/kubernetes/admin.conf\n
+      \       resources:\n          limits:\n            memory: 4Gi\n          requests:\n
+      \           cpu: 10m\n            memory: 40Mi\n        volumeMounts:\n        -
+      name: kubeconfig\n          mountPath: \"/etc/kubernetes\"\n          readOnly:
+      true\n        - name: tmp\n          mountPath: \"/tmp\"\n        readinessProbe:\n
+      \         exec:\n            command: [\"/bin/bash\", \"-c\", \"exit $(</tmp/healthy)\"]\n
+      \         initialDelaySeconds: 5\n          periodSeconds: 5\n      volumes:\n
+      \     - name: kubeconfig\n        secret:\n          secretName: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \     - name: tmp\n        emptyDir: {}\n---\n# Source: konk-service/templates/kubeconfig-deployment.yaml\napiVersion:
+      apps/v1\nkind: Deployment\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app.kubernetes.io/name:
+      konk-service\n      app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \     app.kubernetes.io/component: kubeconfig\n  template:\n    metadata:\n
+      \     annotations:\n        checksum/values: a5501d7c392e5784e6ce447b670ee2d1cbb85386261016605ea78106fa4d3825\n
+      \     labels:\n        app.kubernetes.io/name: konk-service\n        app.kubernetes.io/instance:
+      tagging-aggregate-api-apiservice\n        app.kubernetes.io/component: kubeconfig\n
+      \   spec:\n      serviceAccountName: tagging-aggregate-api-apiservice-konk-service\n
+      \     containers:\n      - name: kind\n        securityContext:\n          {}\n
+      \       image: \"kindest/node:v1.25.8\"\n        imagePullPolicy: Always\n        command:
+      [\"/bin/bash\", \"-c\"]\n        args:\n          - |\n            set -x\n
+      \           while true\n            do\n              # Create KUBECONFIG formatted
+      cert from CertManager certificate\n              # these command run in konk\n
+      \             export KUBECONFIG=$KUBECONFIG_PATH\n              # https://kubernetes.io/docs/setup/best-practices/certificates/#configure-certificates-for-user-accounts\n
+      \             kubectl config set-cluster bulk-konk \\\n                --server=https://bulk-konk.aggregate.svc:6443
+      \\\n                --certificate-authority ca.crt\n              kubectl config
+      set-credentials kubernetes-admin \\\n                --client-certificate tls.crt
+      \\\n                --client-key tls.key\n              kubectl config set-context
+      bulk-konk --cluster bulk-konk --user kubernetes-admin\n              kubectl
+      config use-context bulk-konk\n              # substitutes absolute paths for
+      relative paths\n              sed -i 's@ /@ @' $KUBECONFIG_PATH\n\n              #
+      these commands run in infra cluster\n              unset KUBECONFIG\n              if
+      [ \"$(kubectl -n $NAMESPACE get secret tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      --ignore-not-found 2>&1 )\" = \"\" ]\n              then\n              (\n
+      \               set -e\n                # creates new kubeconfig\n                kubectl
+      -n $NAMESPACE create secret generic tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      \\\n                  --from-file=$KUBECONFIG_PATH \\\n                  --from-file=/tmp/certs/ca.crt
+      \\\n                  --from-file=/tmp/certs/tls.crt \\\n                  --from-file=/tmp/certs/tls.key\n
+      \               kubectl -n $NAMESPACE label secret tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      $LABELS\n                # FIXME: set owner as deployment UID\n                DEPLOYMENT_UID=$(kubectl
+      -n $NAMESPACE get deploy tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      -o jsonpath='{.metadata.uid}')\n                echo \"Found UID: $DEPLOYMENT_UID\"\n
+      \               kubectl -n $NAMESPACE patch secret tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      -p '{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"apps/v1\", \"kind\":\"Deployment\",
+      \"name\":\"tagging-aggregate-api-apiservice-konk-service-kubeconfig\", \"uid\":\"'$DEPLOYMENT_UID'\"}]}}'\n
+      \               md5sum /tmp/certs/* > /tmp/certsum\n              )\n              elif
+      ! md5sum --status --check /tmp/certsum\n              then\n              (\n
+      \               set -e\n                # renews existing kubeconfig\n                kubectl
+      -n $NAMESPACE create secret generic tagging-aggregate-api-apiservice-konk-service-kubeconfig
+      \\\n                  --from-file=$KUBECONFIG_PATH \\\n                  --from-file=/tmp/certs/ca.crt
+      \\\n                  --from-file=/tmp/certs/tls.crt \\\n                  --from-file=/tmp/certs/tls.key
+      \\\n                  --dry-run=client -o yaml | kubectl apply -f -\n                md5sum
+      /tmp/certs/* > /tmp/certsum\n              )\n              fi\n              echo
+      $? > /tmp/status\n\n              date\n              # 3m loop with 30s jitter\n
+      \             sleep $[ 150 + ( $RANDOM % 30 ) ]\n            done\n        env:\n
+      \         - name: KUBECONFIG_PATH\n            value: /etc/kubernetes/admin.conf\n
+      \         - name: LABELS\n            value: app.kubernetes.io/name=konk-service
+      app.kubernetes.io/instance=tagging-aggregate-api-apiservice\n          - name:
+      NAMESPACE\n            value: tagging-v2\n          - name: MY_PODNAME\n            valueFrom:\n
+      \             fieldRef:\n                fieldPath: metadata.name\n        volumeMounts:\n
+      \       - name: kubeconfig\n          mountPath: \"/etc/kubernetes\"\n        -
+      name: kubeconfig-cert\n          mountPath: /tmp/certs\n          readOnly:
+      true\n        resources:\n          limits:\n            memory: 4Gi\n          requests:\n
+      \           cpu: 10m\n            memory: 40Mi\n        readinessProbe:\n          exec:\n
+      \           command:\n            - bash\n            - -c\n            - \"exit
+      $(</tmp/status)\"\n          initialDelaySeconds: 5\n          periodSeconds:
+      5\n      volumes:\n      - name: kubeconfig\n        emptyDir: {}\n      - name:
+      kubeconfig-cert\n        secret:\n          secretName: tagging-aggregate-api-apiservice-konk-service-kubeconfig-cert\n---\n#
+      Source: konk-service/templates/ca.yaml\napiVersion: cert-manager.io/v1\nkind:
+      Certificate\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  secretName: tagging-aggregate-api-apiservice-konk-service\n  duration:
+      17520h #2y\n  issuerRef:\n    name: tagging-aggregate-api-apiservice-konk-service-self-signed\n
+      \ commonName: \"konk-service.infoblox\"\n  isCA: true\n  revisionHistoryLimit:
+      1\n---\n# Source: konk-service/templates/certificate.yaml\napiVersion: cert-manager.io/v1\nkind:
+      Certificate\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-server\n
+      \ labels:\n    helm.sh/chart: konk-service-0.1.0\n    app.kubernetes.io/name:
+      konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  secretName: tagging-aggregate-api-apiservice-konk-service-server\n
+      \ duration: 8760h # 1y\n  issuerRef:\n    name: tagging-aggregate-api-apiservice-konk-service-ca\n
+      \ dnsNames:\n  - tagging-aggregate-api-apiservice\n  - tagging-aggregate-api-apiservice.tagging-v2\n
+      \ - tagging-aggregate-api-apiservice.tagging-v2.svc\n  - tagging-aggregate-api-apiservice.tagging-v2.svc.cluster.local\n
+      \ revisionHistoryLimit: 1\n---\n# Source: konk-service/templates/kubeconfig-certificate.yaml\napiVersion:
+      cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-kubeconfig\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  secretName: tagging-aggregate-api-apiservice-konk-service-kubeconfig-cert\n
+      \ subject:\n    organizations:\n    - system:masters\n  commonName: kubernetes-admin\n
+      \ dnsNames:\n  - admin\n  duration: 12h\n  renewBefore: 4h\n  issuerRef:\n    name:
+      bulk-konk-kubeadm-ca\n    kind: ClusterIssuer\n  revisionHistoryLimit: 1\n---\n#
+      Source: konk-service/templates/ca.yaml\napiVersion: cert-manager.io/v1\nkind:
+      Issuer\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-self-signed\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  selfSigned: {}\n---\n# Source: konk-service/templates/ca.yaml\napiVersion:
+      cert-manager.io/v1\nkind: Issuer\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-ca\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  ca:\n    secretName: tagging-aggregate-api-apiservice-konk-service\n---\n#
+      Source: konk-service/templates/space.yaml\napiVersion: spacecontroller.infoblox-cto.github.com/v1alpha1\nkind:
+      Space\nmetadata:\n  name: tagging-aggregate-api-apiservice-konk-service-imagepullsecret\n
+      \ namespace: tagging-v2\n  labels:\n    helm.sh/chart: konk-service-0.1.0\n
+      \   app.kubernetes.io/name: konk-service\n    app.kubernetes.io/instance: tagging-aggregate-api-apiservice\n
+      \   app.kubernetes.io/version: \"v1.25.8\"\n    app.kubernetes.io/managed-by:
+      Helm\nspec:\n  secretName: tagging-aggregate-api-apiservice-konk-service-imagepullsecret\n
+      \ path: /image-pull/infobloxctokey\n  type: kubernetes.io/dockerconfigjson\n
+      \ secrets:\n    config: VAULT\n"
+    name: tagging-aggregate-api-apiservice

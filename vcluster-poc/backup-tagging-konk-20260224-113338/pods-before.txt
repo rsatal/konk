@@ -1,0 +1,16 @@
+NAME                                                              READY   STATUS                       RESTARTS        AGE     IP              NODE                             NOMINATED NODE   READINESS GATES
+tagging-aggregate-api-8447879bbd-hxvgn                            1/1     Running                      0               94d     100.64.40.102   ip-172-19-224-216.ec2.internal   <none>           <none>
+tagging-aggregate-api-apiservice-konk-service-kubeconfig-5lcp7k   1/1     Running                      0               94d     100.64.37.35    ip-172-19-224-216.ec2.internal   <none>           <none>
+tagging-aggregate-api-apiservice-konk-service-kubectl-apisbgd6f   1/1     Running                      0               89d     100.64.63.81    ip-172-19-225-132.ec2.internal   <none>           <none>
+tagging-aggregate-api-apiservice-konk-service-kubectl-apisdvrbg   0/1     Running                      0               17d     100.64.27.179   ip-172-19-224-216.ec2.internal   <none>           <none>
+tagging-v2-9f44f4996-dtkw7                                        4/4     Running                      0               3d14h   100.64.12.1     ip-172-19-224-221.ec2.internal   <none>           <none>
+tagging-v2-9f44f4996-g2mrn                                        4/4     Running                      0               3d12h   100.64.55.190   ip-172-19-224-171.ec2.internal   <none>           <none>
+tagging-v2-9f44f4996-jm2mb                                        4/4     Running                      0               3d14h   100.64.41.163   ip-172-19-224-15.ec2.internal    <none>           <none>
+tagging-v2-9f44f4996-nm86l                                        4/4     Running                      0               3d5h    100.64.34.55    ip-172-19-224-83.ec2.internal    <none>           <none>
+tagging-v2-9f44f4996-rgt66                                        4/4     Running                      0               3d14h   100.64.50.128   ip-172-19-224-135.ec2.internal   <none>           <none>
+tagging-v2-dbapi-dbclaim-exporter-58f9fdc95b-6bcpv                2/2     Running                      0               46d     100.64.15.239   ip-172-19-225-170.ec2.internal   <none>           <none>
+tagging-v2-redis-master-0                                         1/1     Running                      0               13d     100.64.24.242   ip-172-19-224-85.ec2.internal    <none>           <none>
+tagging-v2-redis-replicas-0                                       1/1     Running                      0               4d15h   100.64.12.208   ip-172-19-225-214.ec2.internal   <none>           <none>
+tagging-v2-redis-replicas-1                                       1/1     Running                      146 (13d ago)   71d     100.64.4.104    ip-172-19-225-170.ec2.internal   <none>           <none>
+tagging-v2-redis-replicas-2                                       1/1     Running                      69 (13d ago)    26d     100.64.63.17    ip-172-19-224-124.ec2.internal   <none>           <none>
+tagging-v2-us-dev-5-6c88cddc75-zstzs                              0/1     CreateContainerConfigError   0               8d      100.64.50.94    ip-172-19-225-155.ec2.internal   <none>           <none>
