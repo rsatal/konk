@@ -11,7 +11,8 @@
 #   ./migrate-tagging-to-vcluster.sh step2   # Generate vcluster kubeconfig secret
 #   ./migrate-tagging-to-vcluster.sh step3   # Register APIService inside vcluster
 #   ./migrate-tagging-to-vcluster.sh step4   # Patch tagging-aggregate-api deployment
-#   ./migrate-tagging-to-vcluster.sh verify  # Verify tagging API works through vcluster
+#   ./migrate-tagging-to-vcluster.sh step5   # Migrate bulk deployment to vcluster
+#   ./migrate-tagging-to-vcluster.sh verify  # Verify tagging + bulk APIs work
 #   ./migrate-tagging-to-vcluster.sh rollback
 
 set -euo pipefail
@@ -34,6 +35,15 @@ KONK_KUBECONFIG_SECRET="tagging-aggregate-api-apiservice-konk-service-kubeconfig
 # New vcluster secrets (what we're creating)
 VCLUSTER_TLS_SECRET="tagging-aggregate-api-vcluster-server"
 VCLUSTER_KUBECONFIG_SECRET="tagging-aggregate-api-vcluster-kubeconfig"
+
+# Bulk deployment configuration (in aggregate namespace)
+BULK_NS="aggregate"
+BULK_DEPLOYMENT="bulk"
+BULK_KONK_KUBECONFIG_SECRET="bulk-konk-kubeconfig"
+BULK_KONK_PROXY_CLIENT_SECRET="bulk-konk-proxy-client"
+BULK_VCLUSTER_KUBECONFIG_SECRET="bulk-vcluster-kubeconfig"
+BULK_VCLUSTER_PROXY_CLIENT_SECRET="bulk-vcluster-proxy-client"
+VCLUSTER_HOST="vcluster.vcluster:443"
 
 # Backup directory
 BACKUP_DIR="./backup-tagging-konk-$(date +%Y%m%d-%H%M%S)"
@@ -143,17 +153,40 @@ preflight() {
     # 7. Test tagging API via konk (current state)
     info "Testing tagging API via konk (current working state)..."
     info "  Checking if bulk-konk apiserver is reachable..."
-    KONK_POD=$(kubectl get pods -n aggregate -l app.kubernetes.io/name=konk -o name 2>/dev/null | head -1)
+    KONK_POD=$(kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=konk -o name 2>/dev/null | head -1)
     if [[ -n "${KONK_POD}" ]]; then
         ok "bulk-konk pod found: ${KONK_POD}"
     else
         # Try alternate
-        KONK_POD=$(kubectl get pods -n aggregate -o name 2>/dev/null | grep "bulk-konk" | grep -v "etcd\|init" | head -1)
+        KONK_POD=$(kubectl get pods -n ${BULK_NS} -o name 2>/dev/null | grep "bulk-konk" | grep -v "etcd\|init" | head -1)
         if [[ -n "${KONK_POD}" ]]; then
             ok "bulk-konk pod found: ${KONK_POD}"
         else
-            warn "bulk-konk pod not found in aggregate namespace"
+            warn "bulk-konk pod not found in ${BULK_NS} namespace"
         fi
+    fi
+
+    # 8. Check bulk deployment
+    info "Checking bulk deployment in ${BULK_NS} namespace..."
+    BULK_READY=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    BULK_DESIRED=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "?")
+    if [[ "${BULK_READY}" -ge 1 ]]; then
+        ok "Bulk deployment ${BULK_DEPLOYMENT} is running (${BULK_READY}/${BULK_DESIRED} ready)"
+    else
+        fail "Bulk deployment ${BULK_DEPLOYMENT} is NOT ready (${BULK_READY}/${BULK_DESIRED})"
+    fi
+
+    # 9. Check bulk konk secrets
+    info "Checking bulk konk secrets in ${BULK_NS}..."
+    if kubectl get secret ${BULK_KONK_KUBECONFIG_SECRET} -n ${BULK_NS} &>/dev/null; then
+        ok "Bulk konk kubeconfig secret exists: ${BULK_KONK_KUBECONFIG_SECRET}"
+    else
+        warn "Bulk konk kubeconfig secret NOT found: ${BULK_KONK_KUBECONFIG_SECRET}"
+    fi
+    if kubectl get secret ${BULK_KONK_PROXY_CLIENT_SECRET} -n ${BULK_NS} &>/dev/null; then
+        ok "Bulk konk proxy-client secret exists: ${BULK_KONK_PROXY_CLIENT_SECRET}"
+    else
+        warn "Bulk konk proxy-client secret NOT found: ${BULK_KONK_PROXY_CLIENT_SECRET}"
     fi
 
     echo ""
@@ -212,10 +245,38 @@ backup() {
         warn "Service ${SERVICE_NAME} not found, skipping"
     fi
 
-    # 6. Save current pod status for reference
+    # 6. Backup bulk deployment (in aggregate namespace)
+    info "Backing up bulk deployment in ${BULK_NS} namespace..."
+    if kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o yaml > "${BACKUP_DIR}/bulk-deployment.yaml" 2>/dev/null; then
+        ok "Saved: ${BACKUP_DIR}/bulk-deployment.yaml"
+    else
+        warn "Bulk deployment ${BULK_DEPLOYMENT} not found in ${BULK_NS}, skipping"
+    fi
+
+    # 7. Backup bulk-konk-kubeconfig secret
+    info "Backing up bulk konk kubeconfig secret..."
+    if kubectl get secret ${BULK_KONK_KUBECONFIG_SECRET} -n ${BULK_NS} -o yaml > "${BACKUP_DIR}/bulk-konk-kubeconfig-secret.yaml" 2>/dev/null; then
+        ok "Saved: ${BACKUP_DIR}/bulk-konk-kubeconfig-secret.yaml"
+    else
+        warn "Secret ${BULK_KONK_KUBECONFIG_SECRET} not found in ${BULK_NS}, skipping"
+    fi
+
+    # 8. Backup bulk-konk-proxy-client secret
+    info "Backing up bulk konk proxy-client secret..."
+    if kubectl get secret ${BULK_KONK_PROXY_CLIENT_SECRET} -n ${BULK_NS} -o yaml > "${BACKUP_DIR}/bulk-konk-proxy-client-secret.yaml" 2>/dev/null; then
+        ok "Saved: ${BACKUP_DIR}/bulk-konk-proxy-client-secret.yaml"
+    else
+        warn "Secret ${BULK_KONK_PROXY_CLIENT_SECRET} not found in ${BULK_NS}, skipping"
+    fi
+
+    # 9. Save current pod status for reference
     info "Saving current pod status..."
     kubectl get pods -n ${TAGGING_NS} -o wide > "${BACKUP_DIR}/pods-before.txt" 2>/dev/null
     ok "Saved: ${BACKUP_DIR}/pods-before.txt"
+
+    info "Saving bulk pod status..."
+    kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o wide > "${BACKUP_DIR}/bulk-pods-before.txt" 2>/dev/null
+    ok "Saved: ${BACKUP_DIR}/bulk-pods-before.txt"
 
     echo ""
     echo "============================================"
@@ -643,6 +704,205 @@ json.dump(deploy, sys.stdout)
 }
 
 # ============================================================================
+# STEP 5: Migrate bulk deployment from konk to vcluster
+# ============================================================================
+step5_migrate_bulk() {
+    echo ""
+    echo "============================================"
+    echo "  STEP 5: Migrate bulk deployment to vcluster"
+    echo "============================================"
+    echo ""
+
+    # The bulk deployment in the aggregate namespace uses konk to proxy
+    # requests to the tagging-aggregate-api. After migrating tagging to
+    # vcluster (steps 1-4), we must also point bulk at vcluster.
+    #
+    # What we change:
+    #   1. Copy vcluster kubeconfig and proxy-client secrets from tagging-v2 to aggregate
+    #   2. Patch bulk deployment:
+    #      - --konk.host arg: bulk-konk.aggregate:6443 → vcluster.vcluster:443
+    #      - kubeconfig volume: bulk-konk-kubeconfig → bulk-vcluster-kubeconfig
+    #      - proxy-client-cert volume: bulk-konk-proxy-client → bulk-vcluster-proxy-client
+
+    # --- Part A: Copy vcluster secrets to aggregate namespace ---
+    info "Copying vcluster secrets from ${TAGGING_NS} to ${BULK_NS} namespace..."
+
+    # Check source secrets exist
+    if ! kubectl get secret ${VCLUSTER_KUBECONFIG_SECRET} -n ${TAGGING_NS} &>/dev/null; then
+        fail "Source secret ${VCLUSTER_KUBECONFIG_SECRET} not found in ${TAGGING_NS}. Run step 2 first."
+        return 1
+    fi
+    if ! kubectl get secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} &>/dev/null; then
+        fail "Source secret ${VCLUSTER_TLS_SECRET} not found in ${TAGGING_NS}. Run step 1 first."
+        return 1
+    fi
+
+    # Copy kubeconfig secret → bulk-vcluster-kubeconfig in aggregate
+    if kubectl get secret ${BULK_VCLUSTER_KUBECONFIG_SECRET} -n ${BULK_NS} &>/dev/null; then
+        info "Secret ${BULK_VCLUSTER_KUBECONFIG_SECRET} already exists in ${BULK_NS}, updating..."
+        kubectl get secret ${VCLUSTER_KUBECONFIG_SECRET} -n ${TAGGING_NS} -o json | \
+            python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata'] = {'name': '${BULK_VCLUSTER_KUBECONFIG_SECRET}', 'namespace': '${BULK_NS}'}
+json.dump(s, sys.stdout)
+" | kubectl apply -f - 2>&1
+    else
+        kubectl get secret ${VCLUSTER_KUBECONFIG_SECRET} -n ${TAGGING_NS} -o json | \
+            python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata'] = {'name': '${BULK_VCLUSTER_KUBECONFIG_SECRET}', 'namespace': '${BULK_NS}'}
+json.dump(s, sys.stdout)
+" | kubectl create -f - 2>&1
+    fi
+    ok "Copied kubeconfig → ${BULK_VCLUSTER_KUBECONFIG_SECRET} in ${BULK_NS}"
+
+    # Copy TLS/proxy-client secret → bulk-vcluster-proxy-client in aggregate
+    if kubectl get secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} -n ${BULK_NS} &>/dev/null; then
+        info "Secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} already exists in ${BULK_NS}, updating..."
+        kubectl get secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} -o json | \
+            python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata'] = {'name': '${BULK_VCLUSTER_PROXY_CLIENT_SECRET}', 'namespace': '${BULK_NS}'}
+json.dump(s, sys.stdout)
+" | kubectl apply -f - 2>&1
+    else
+        kubectl get secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} -o json | \
+            python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata'] = {'name': '${BULK_VCLUSTER_PROXY_CLIENT_SECRET}', 'namespace': '${BULK_NS}'}
+json.dump(s, sys.stdout)
+" | kubectl create -f - 2>&1
+    fi
+    ok "Copied proxy-client cert → ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} in ${BULK_NS}"
+
+    echo ""
+
+    # --- Part B: Patch bulk deployment ---
+    info "Current bulk deployment konk settings:"
+    kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.template.spec.containers[0].args}' | \
+        python3 -c "
+import sys, json
+args = json.load(sys.stdin)
+for i, a in enumerate(args):
+    if 'konk.host' in a:
+        print(f'  arg[{i}]: {a}')
+" 2>/dev/null || true
+    kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.template.spec.volumes}' | \
+        python3 -c "
+import sys, json
+vols = json.load(sys.stdin)
+for v in vols:
+    secret = v.get('secret', {}).get('secretName', 'N/A')
+    print(f\"  Volume '{v['name']}' → secret '{secret}'\")
+" 2>/dev/null || true
+
+    echo ""
+    warn "This will patch the bulk deployment to use:"
+    echo "  --konk.host         → ${VCLUSTER_HOST}"
+    echo "  kubeconfig volume   → ${BULK_VCLUSTER_KUBECONFIG_SECRET}"
+    echo "  proxy-client volume → ${BULK_VCLUSTER_PROXY_CLIENT_SECRET}"
+    echo ""
+    echo "  The bulk pods will restart with vcluster connectivity."
+    echo ""
+    read -p "  Continue? (y/N): " CONFIRM
+    if [[ "${CONFIRM}" != "y" && "${CONFIRM}" != "Y" ]]; then
+        info "Aborted."
+        return 0
+    fi
+
+    info "Patching bulk deployment..."
+
+    # Patch 1: Update --konk.host arg (find the arg index dynamically)
+    KONK_HOST_INDEX=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.template.spec.containers[0].args}' | \
+        python3 -c "
+import sys, json
+args = json.load(sys.stdin)
+for i, a in enumerate(args):
+    if a.startswith('--konk.host='):
+        print(i)
+        break
+else:
+    print(-1)
+" 2>/dev/null)
+
+    if [[ "${KONK_HOST_INDEX}" == "-1" || -z "${KONK_HOST_INDEX}" ]]; then
+        fail "Could not find --konk.host arg in bulk deployment"
+        return 1
+    fi
+    info "  Found --konk.host at args index ${KONK_HOST_INDEX}"
+
+    kubectl patch deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} --type='json' \
+        -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/args/${KONK_HOST_INDEX}\", \"value\": \"--konk.host=${VCLUSTER_HOST}\"}]" 2>&1
+    ok "  Patched --konk.host → ${VCLUSTER_HOST}"
+
+    # Patch 2: Update kubeconfig volume (find the volume index dynamically)
+    KUBECONFIG_VOL_INDEX=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.template.spec.volumes}' | \
+        python3 -c "
+import sys, json
+vols = json.load(sys.stdin)
+for i, v in enumerate(vols):
+    if v['name'] == 'kubeconfig':
+        print(i)
+        break
+else:
+    print(-1)
+" 2>/dev/null)
+
+    if [[ "${KUBECONFIG_VOL_INDEX}" != "-1" && -n "${KUBECONFIG_VOL_INDEX}" ]]; then
+        kubectl patch deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} --type='json' \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/volumes/${KUBECONFIG_VOL_INDEX}/secret/secretName\", \"value\": \"${BULK_VCLUSTER_KUBECONFIG_SECRET}\"}]" 2>&1
+        ok "  Patched kubeconfig volume → ${BULK_VCLUSTER_KUBECONFIG_SECRET}"
+    else
+        warn "  Could not find 'kubeconfig' volume, skipping"
+    fi
+
+    # Patch 3: Update proxy-client-cert volume (find the volume index dynamically)
+    PROXY_VOL_INDEX=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} -o jsonpath='{.spec.template.spec.volumes}' | \
+        python3 -c "
+import sys, json
+vols = json.load(sys.stdin)
+for i, v in enumerate(vols):
+    if v['name'] == 'proxy-client-cert':
+        print(i)
+        break
+else:
+    print(-1)
+" 2>/dev/null)
+
+    if [[ "${PROXY_VOL_INDEX}" != "-1" && -n "${PROXY_VOL_INDEX}" ]]; then
+        kubectl patch deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} --type='json' \
+            -p="[{\"op\": \"replace\", \"path\": \"/spec/template/spec/volumes/${PROXY_VOL_INDEX}/secret/secretName\", \"value\": \"${BULK_VCLUSTER_PROXY_CLIENT_SECRET}\"}]" 2>&1
+        ok "  Patched proxy-client-cert volume → ${BULK_VCLUSTER_PROXY_CLIENT_SECRET}"
+    else
+        warn "  Could not find 'proxy-client-cert' volume, skipping"
+    fi
+
+    # Wait for rollout
+    info "Waiting for bulk deployment rollout (timeout: 120s)..."
+    kubectl rollout status deployment/${BULK_DEPLOYMENT} -n ${BULK_NS} --timeout=120s 2>&1 || {
+        warn "Rollout may not have completed. Check pod status:"
+        kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT}
+    }
+
+    # Show new pod status
+    info "New bulk pod status:"
+    kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o wide
+
+    # Show pod logs (last 10 lines)
+    info "Bulk pod logs (last 10 lines):"
+    BULK_POD_NAME=$(kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o name | head -1)
+    if [[ -n "${BULK_POD_NAME}" ]]; then
+        kubectl logs ${BULK_POD_NAME} -n ${BULK_NS} --tail=10 2>/dev/null || warn "Could not get bulk pod logs"
+    fi
+
+    ok "Step 5 complete"
+}
+
+# ============================================================================
 # VERIFY: Test tagging API works through vcluster
 # ============================================================================
 verify() {
@@ -709,7 +969,73 @@ verify() {
 
     echo ""
     echo "============================================"
-    echo "  Verify complete. Review results above."
+    echo "  Verify: Tagging API checks complete."
+    echo "============================================"
+    echo ""
+
+    # --- Bulk deployment verification ---
+    echo "============================================"
+    echo "  Verify: Bulk deployment health"
+    echo "============================================"
+    echo ""
+
+    # 4. Check bulk pods are running
+    info "Checking bulk pod status..."
+    kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o wide
+    echo ""
+
+    BULK_READY=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} \
+        -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    BULK_DESIRED=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} \
+        -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "?")
+    if [[ "${BULK_READY}" -ge 1 ]]; then
+        ok "Bulk deployment is running (${BULK_READY}/${BULK_DESIRED} ready)"
+    else
+        fail "Bulk deployment is NOT ready (${BULK_READY}/${BULK_DESIRED})"
+        BULK_POD=$(kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o name | head -1)
+        if [[ -n "${BULK_POD}" ]]; then
+            info "Bulk pod logs:"
+            kubectl logs ${BULK_POD} -n ${BULK_NS} --tail=20 2>/dev/null || true
+        fi
+    fi
+
+    # 5. Verify bulk deployment is now pointing to vcluster
+    info "Verifying bulk deployment points to vcluster..."
+    CURRENT_KONK_HOST=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} \
+        -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null | \
+        python3 -c "
+import sys, json
+args = json.load(sys.stdin)
+for a in args:
+    if a.startswith('--konk.host='):
+        print(a.split('=',1)[1])
+        break
+" 2>/dev/null || echo "unknown")
+    if [[ "${CURRENT_KONK_HOST}" == "${VCLUSTER_HOST}" ]]; then
+        ok "Bulk --konk.host is set to ${VCLUSTER_HOST}"
+    else
+        warn "Bulk --konk.host is '${CURRENT_KONK_HOST}', expected '${VCLUSTER_HOST}'"
+    fi
+
+    # 6. Check bulk pod logs for errors
+    info "Checking bulk pod logs for errors..."
+    BULK_POD=$(kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o name | head -1)
+    if [[ -n "${BULK_POD}" ]]; then
+        BULK_ERRORS=$(kubectl logs ${BULK_POD} -n ${BULK_NS} --tail=50 2>/dev/null | \
+            grep -ci "error\|x509\|connection refused\|timeout" 2>/dev/null || echo "0")
+        if [[ "${BULK_ERRORS}" -eq 0 ]]; then
+            ok "No errors in bulk pod logs (last 50 lines)"
+        else
+            warn "Found ${BULK_ERRORS} potential error lines in bulk pod logs"
+            kubectl logs ${BULK_POD} -n ${BULK_NS} --tail=50 2>/dev/null | \
+                grep -i "error\|x509\|connection refused\|timeout" | head -5 || true
+        fi
+    fi
+
+    echo ""
+    echo "============================================"
+    echo "  All verification checks complete."
+    echo "  Review results above."
     echo "============================================"
 }
 
@@ -743,24 +1069,38 @@ rollback() {
     info "Restoring from: ${RESTORE_DIR}"
     echo ""
 
-    # 1. Restore deployment (this is the main change to roll back)
+    # 1. Restore tagging deployment (this is the main change to roll back)
     if [[ -f "${RESTORE_DIR}/deployment.yaml" ]]; then
-        info "Restoring deployment..."
+        info "Restoring tagging deployment..."
         kubectl apply -f "${RESTORE_DIR}/deployment.yaml" 2>&1
-        ok "Deployment restored"
+        ok "Tagging deployment restored"
     else
         fail "deployment.yaml not found in backup!"
         return 1
     fi
 
-    # 2. Wait for rollout
-    info "Waiting for rollout..."
+    # 2. Wait for tagging rollout
+    info "Waiting for tagging rollout..."
     kubectl rollout status deployment/${DEPLOYMENT_NAME} -n ${TAGGING_NS} --timeout=120s 2>&1 || {
-        warn "Rollout may not have completed"
+        warn "Tagging rollout may not have completed"
     }
 
-    # 3. Clean up vcluster secrets (optional — they don't hurt anything)
-    info "Cleaning up vcluster secrets..."
+    # 3. Restore bulk deployment
+    if [[ -f "${RESTORE_DIR}/bulk-deployment.yaml" ]]; then
+        info "Restoring bulk deployment..."
+        kubectl apply -f "${RESTORE_DIR}/bulk-deployment.yaml" 2>&1
+        ok "Bulk deployment restored"
+
+        info "Waiting for bulk rollout..."
+        kubectl rollout status deployment/${BULK_DEPLOYMENT} -n ${BULK_NS} --timeout=120s 2>&1 || {
+            warn "Bulk rollout may not have completed"
+        }
+    else
+        info "No bulk-deployment.yaml in backup, skipping bulk restore"
+    fi
+
+    # 4. Clean up vcluster secrets from tagging namespace (optional — they don't hurt anything)
+    info "Cleaning up vcluster secrets from ${TAGGING_NS}..."
     kubectl delete secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} 2>/dev/null && \
         ok "Deleted: ${VCLUSTER_TLS_SECRET}" || \
         info "Secret ${VCLUSTER_TLS_SECRET} not found (already clean)"
@@ -769,7 +1109,17 @@ rollback() {
         ok "Deleted: ${VCLUSTER_KUBECONFIG_SECRET}" || \
         info "Secret ${VCLUSTER_KUBECONFIG_SECRET} not found (already clean)"
 
-    # 4. Clean up APIService inside vcluster (optional)
+    # 5. Clean up vcluster secrets from aggregate namespace
+    info "Cleaning up vcluster secrets from ${BULK_NS}..."
+    kubectl delete secret ${BULK_VCLUSTER_KUBECONFIG_SECRET} -n ${BULK_NS} 2>/dev/null && \
+        ok "Deleted: ${BULK_VCLUSTER_KUBECONFIG_SECRET} from ${BULK_NS}" || \
+        info "Secret ${BULK_VCLUSTER_KUBECONFIG_SECRET} not found in ${BULK_NS} (already clean)"
+
+    kubectl delete secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} -n ${BULK_NS} 2>/dev/null && \
+        ok "Deleted: ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} from ${BULK_NS}" || \
+        info "Secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} not found in ${BULK_NS} (already clean)"
+
+    # 6. Clean up APIService inside vcluster (optional)
     if command -v vcluster &>/dev/null; then
         info "Cleaning up APIService inside vcluster..."
         vcluster connect ${VCLUSTER_NAME} --namespace ${VCLUSTER_NS} -- \
@@ -778,18 +1128,29 @@ rollback() {
             info "APIService not found inside vcluster (already clean)"
     fi
 
-    # 5. Verify pod is back to working state
+    # 7. Verify pods are back to working state
     echo ""
-    info "Checking restored pod status..."
+    info "Checking restored tagging pod status..."
     kubectl get pods -n ${TAGGING_NS} -l app.kubernetes.io/name=${DEPLOYMENT_NAME} -o wide
 
     READY=$(kubectl get deployment ${DEPLOYMENT_NAME} -n ${TAGGING_NS} \
         -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
     if [[ "${READY}" -ge 1 ]]; then
-        ok "Pod is running and ready — rollback successful"
+        ok "Tagging pod is running and ready"
     else
-        warn "Pod not ready yet. Give it a minute and check:"
+        warn "Tagging pod not ready yet. Give it a minute and check:"
         echo "  kubectl get pods -n ${TAGGING_NS} -l app.kubernetes.io/name=${DEPLOYMENT_NAME}"
+    fi
+
+    info "Checking restored bulk pod status..."
+    kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT} -o wide
+    BULK_READY=$(kubectl get deployment ${BULK_DEPLOYMENT} -n ${BULK_NS} \
+        -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+    if [[ "${BULK_READY}" -ge 1 ]]; then
+        ok "Bulk pod is running and ready"
+    else
+        warn "Bulk pod not ready yet. Give it a minute and check:"
+        echo "  kubectl get pods -n ${BULK_NS} -l app.kubernetes.io/name=${BULK_DEPLOYMENT}"
     fi
 
     echo ""
@@ -810,12 +1171,13 @@ usage() {
     echo "  step1       - Create self-signed TLS certificate secret"
     echo "  step2       - Generate vcluster kubeconfig secret"
     echo "  step3       - Register APIService + RBAC inside vcluster"
-    echo "  step4       - Patch deployment to use vcluster secrets"
-    echo "  verify      - Test tagging API works through vcluster"
+    echo "  step4       - Patch tagging deployment to use vcluster secrets"
+    echo "  step5       - Migrate bulk deployment from konk to vcluster"
+    echo "  verify      - Test tagging + bulk APIs work through vcluster"
     echo "  rollback    - Restore original konk-based state from backup"
     echo ""
     echo "Quick run (all steps):"
-    echo "  $0 preflight && $0 backup && $0 step1 && $0 step2 && $0 step3 && $0 step4 && $0 verify"
+    echo "  $0 preflight && $0 backup && $0 step1 && $0 step2 && $0 step3 && $0 step4 && $0 step5 && $0 verify"
 }
 
 case "${1:-}" in
@@ -825,6 +1187,7 @@ case "${1:-}" in
     step2)     step2_create_kubeconfig ;;
     step3)     step3_register_in_vcluster ;;
     step4)     step4_patch_deployment ;;
+    step5)     step5_migrate_bulk ;;
     verify)    verify ;;
     rollback)  rollback "$@" ;;
     *)         usage ;;

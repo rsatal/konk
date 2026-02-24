@@ -1,0 +1,205 @@
++ kubectl get deployment bulk -n aggregate -o yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "86"
+    meta.helm.sh/release-name: bulk
+    meta.helm.sh/release-namespace: aggregate
+  creationTimestamp: "2025-04-09T04:42:59Z"
+  generation: 92
+  labels:
+    app.kubernetes.io/instance: bulk
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: bulk
+    app.kubernetes.io/version: "1.0"
+    helm.sh/chart: bulk-v2.5.0-72-g9a753381-j177
+    helm.toolkit.fluxcd.io/name: bulk
+    helm.toolkit.fluxcd.io/namespace: vela-system
+    k8slens-edit-resource-version: v1
+  name: bulk
+  namespace: aggregate
+  resourceVersion: "3660537118"
+  uid: 79e2b5eb-dd58-4fb2-a3ba-ab517da0aa33
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: bulk
+      app.kubernetes.io/name: bulk
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/restartedAt: "2026-02-17T14:38:54+05:30"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8085"
+        prometheus.io/scrape: "true"
+      creationTimestamp: null
+      labels:
+        app.kubernetes.io/instance: bulk
+        app.kubernetes.io/name: bulk
+        credentials.objectstorage.persistence.atlas.infoblox.com/secret-name: bulk-creds
+    spec:
+      containers:
+      - args:
+        - --logging.level=info
+        - --import.range.limit=100
+        - --operation.timeout=3000m
+        - --api.client.timeout=10m
+        - --api.client.qps=50
+        - --api.client.burst=70
+        - --enforce.required=false
+        - --database.dsn=fsnotify://postgres/var/run/db-dsn/dsn.txt
+        - --database.type=hotload
+        - --database.logging=false
+        - --authorization.header=X-REMOTE-EXTRA-OBO
+        - --authorization.token=
+        - --konk.host=bulk-konk.aggregate:6443
+        - --konk.tls.insecure=true
+        - --konk.tls.cert=/tmp/k8s-apiserver-server/serving-certs/tls.crt
+        - --konk.tls.key=/tmp/k8s-apiserver-server/serving-certs/tls.key
+        - --storage.proxy.substitutekey=false
+        - --storage.proxy.port=8008
+        - --storage.proxy.endpoint=bulkstorage-csp.us-dev-5.eng.test.infoblox.com
+        - --storage.accesskey=
+        - --storage.usessl=false
+        - --storage.region=us-east-1
+        - --storage.ttl=2m
+        - --storage.retain.intermediate=false
+        - --storage.bucket=$(BUCKET_NAME)
+        - --storage.subdir=env-5
+        - --storage.temp.folder=temp
+        - --atlas.tagging.address=tagging.tagging-v2.svc.cluster.local
+        - --atlas.tagging.port=9091
+        - --atlas.feature.flag.enable=true
+        - --atlas.feature.flag.address=feature-flag.feature-flag.svc
+        - --atlas.feature.flag.port=9090
+        - --analyze.max.payload=750 mb
+        - --cleanup.operation.expiry=30
+        - --cleanup.operation.frequency=0 0 * * *
+        - --tracing.enable=true
+        - --tracing.address=oc-collector.tracing
+        - --tracing.port=55678
+        - --tracing.probability=0
+        - --server.grpc.maxRecvMsgSize=335544320
+        - --server.gateway.maxCallRecvMsgSize=335544320
+        - --schema.registry.host=ib-kafka-schema-registry
+        - --schema.registry.namespace=ib-kafka
+        - --schema.registry.port=8081
+        - --claimcheck.enabled=false
+        - --message.size.limit=3670016
+        - --encoding.inclusionList=recordv2s
+        env:
+        - name: MY_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: BUCKET_NAME
+          valueFrom:
+            secretKeyRef:
+              key: endpoint
+              name: bulk-creds
+        - name: KUBECONFIG
+          value: /etc/kubernetes/admin.conf
+        image: infobloxcto/atlas.bulk:v2.5.0-72-g9a753381-j177
+        imagePullPolicy: Always
+        livenessProbe:
+          failureThreshold: 2
+          httpGet:
+            path: /health
+            port: 8081
+            scheme: HTTP
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        name: bulk
+        ports:
+        - containerPort: 5051
+          name: http
+          protocol: TCP
+        - containerPort: 8008
+          name: storage-proxy
+          protocol: TCP
+        - containerPort: 8081
+          name: internal
+          protocol: TCP
+        - containerPort: 8085
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 2
+          httpGet:
+            path: /ready
+            port: 8081
+            scheme: HTTP
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: "2"
+            memory: 16Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/kubernetes
+          name: kubeconfig
+          readOnly: true
+        - mountPath: /tmp/k8s-apiserver-server/serving-certs
+          name: proxy-client-cert
+          readOnly: true
+        - mountPath: /var/run/db-dsn
+          name: db-dsn-volume
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: bulk
+      serviceAccountName: bulk
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: kubeconfig
+        secret:
+          defaultMode: 420
+          secretName: bulk-konk-kubeconfig
+      - name: proxy-client-cert
+        secret:
+          defaultMode: 420
+          secretName: bulk-konk-proxy-client
+      - name: db-dsn-volume
+        secret:
+          defaultMode: 420
+          optional: false
+          secretName: bulk-db-dsn
+status:
+  availableReplicas: 2
+  conditions:
+  - lastTransitionTime: "2025-10-16T09:27:20Z"
+    lastUpdateTime: "2026-02-23T07:06:18Z"
+    message: ReplicaSet "bulk-6d4b59d9f5" has successfully progressed.
+    reason: NewReplicaSetAvailable
+    status: "True"
+    type: Progressing
+  - lastTransitionTime: "2026-02-23T07:13:55Z"
+    lastUpdateTime: "2026-02-23T07:13:55Z"
+    message: Deployment has minimum availability.
+    reason: MinimumReplicasAvailable
+    status: "True"
+    type: Available
+  observedGeneration: 92
+  readyReplicas: 2
+  replicas: 2
+  updatedReplicas: 2
