@@ -28,18 +28,18 @@ Client → env-5.test.infoblox.com → bulk deployment
                                       │ kubeconfig: bulk-konk-kubeconfig
                                       │ proxy-client: bulk-konk-proxy-client
                                       ▼
-                               ┌─────────────┐
+                               ┌───────────-──┐
                                │  bulk-konk   │ (konk kube-apiserver)
                                │  port 6443   │
-                               └──────┬──────┘
+                               └──────┬───-───┘
                                       │ APIService aggregation
                                       ▼
-                     ┌────────────────────────────────────┐
-                     │    19 KonkService CRs              │
+                     ┌──────────────────────────────────-──┐
+                     │    19 KonkService CRs               │
                      │    11 Extension API Servers         │
                      │    12 API Groups                    │
                      │    (including tagging-aggregate-api)│
-                     └────────────────────────────────────┘
+                     └──────────────────────────────────-──┘
 ```
 
 ### Post-Migration Architecture (Tagging Only)
@@ -57,10 +57,10 @@ Client → env-5.test.infoblox.com → bulk deployment
                                └──────┬───────┘
                                       │ APIService: v1alpha1.tagging.bulk.infoblox.com
                                       ▼
-                            ┌─────────────────────┐
+                            ┌────────────────-─────┐
                             │ tagging-aggregate-api│
                             │ (tagging-v2 ns)      │
-                            └─────────────────────┘
+                            └────────────────-─────┘
 ```
 
 ---

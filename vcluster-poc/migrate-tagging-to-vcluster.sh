@@ -758,26 +758,59 @@ json.dump(s, sys.stdout)
     fi
     ok "Copied kubeconfig → ${BULK_VCLUSTER_KUBECONFIG_SECRET} in ${BULK_NS}"
 
-    # Copy TLS/proxy-client secret → bulk-vcluster-proxy-client in aggregate
-    if kubectl get secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} -n ${BULK_NS} &>/dev/null; then
-        info "Secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} already exists in ${BULK_NS}, updating..."
-        kubectl get secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} -o json | \
-            python3 -c "
-import sys, json
-s = json.load(sys.stdin)
-s['metadata'] = {'name': '${BULK_VCLUSTER_PROXY_CLIENT_SECRET}', 'namespace': '${BULK_NS}'}
-json.dump(s, sys.stdout)
-" | kubectl apply -f - 2>&1
-    else
-        kubectl get secret ${VCLUSTER_TLS_SECRET} -n ${TAGGING_NS} -o json | \
-            python3 -c "
-import sys, json
-s = json.load(sys.stdin)
-s['metadata'] = {'name': '${BULK_VCLUSTER_PROXY_CLIENT_SECRET}', 'namespace': '${BULK_NS}'}
-json.dump(s, sys.stdout)
-" | kubectl create -f - 2>&1
+    # Create proxy-client secret from vcluster admin kubeconfig client cert
+    # NOTE: The proxy-client secret must contain the CLIENT cert/key/CA from the
+    # vcluster admin kubeconfig, NOT the server TLS cert. Using the server cert
+    # causes "Unauthorized" errors because bulk uses this cert to authenticate
+    # as a client to the vcluster API server (requestheader proxy auth).
+    info "Extracting client cert/key/CA from vcluster kubeconfig for proxy-client secret..."
+
+    # Extract client-certificate-data, client-key-data, certificate-authority-data
+    # from the admin.conf in the vcluster kubeconfig secret
+    PROXY_CLIENT_JSON=$(kubectl get secret ${VCLUSTER_KUBECONFIG_SECRET} -n ${TAGGING_NS} -o jsonpath='{.data.admin\.conf}' | \
+        base64 -d | python3 -c "
+import sys, yaml, base64, json
+
+kc = yaml.safe_load(sys.stdin)
+user = kc['users'][0]['user']
+cluster = kc['clusters'][0]['cluster']
+
+# These are already base64-encoded inside the kubeconfig YAML,
+# but yaml.safe_load decodes them to raw bytes via base64 decoding.
+# We need to re-encode for the K8s secret.
+client_cert = base64.b64encode(base64.b64decode(user['client-certificate-data'])).decode()
+client_key = base64.b64encode(base64.b64decode(user['client-key-data'])).decode()
+ca_cert = base64.b64encode(base64.b64decode(cluster['certificate-authority-data'])).decode()
+
+secret = {
+    'apiVersion': 'v1',
+    'kind': 'Secret',
+    'metadata': {
+        'name': '${BULK_VCLUSTER_PROXY_CLIENT_SECRET}',
+        'namespace': '${BULK_NS}'
+    },
+    'type': 'Opaque',
+    'data': {
+        'tls.crt': client_cert,
+        'tls.key': client_key,
+        'ca.crt': ca_cert
+    }
+}
+json.dump(secret, sys.stdout)
+" 2>&1)
+
+    if [[ -z "${PROXY_CLIENT_JSON}" || "${PROXY_CLIENT_JSON}" == *"error"* ]]; then
+        fail "Failed to extract client cert from vcluster kubeconfig"
+        echo "${PROXY_CLIENT_JSON}"
+        return 1
     fi
-    ok "Copied proxy-client cert → ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} in ${BULK_NS}"
+
+    if kubectl get secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} -n ${BULK_NS} &>/dev/null; then
+        info "Secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} already exists, deleting and recreating..."
+        kubectl delete secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} -n ${BULK_NS} 2>&1
+    fi
+    echo "${PROXY_CLIENT_JSON}" | kubectl create -f - 2>&1
+    ok "Created proxy-client secret ${BULK_VCLUSTER_PROXY_CLIENT_SECRET} in ${BULK_NS} (from vcluster admin client cert)"
 
     echo ""
 
